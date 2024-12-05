@@ -149,11 +149,109 @@ def uneven_heads_all2all(input, scatter_idx, gather_idx, batch_dim_idx, group):
 
     return output
 
+from deepspeed.module_inject.sp_shard import get_seq_shard_size_list, set_seq_shard_size_list
+def get_global_seq_len(input, gather_idx, sp_group):
+    '''
+        get global sequence length
+    '''
+    if get_seq_shard_size_list() is not None:
+        return sum(get_seq_shard_size_list())
+    else:
+        assert gather_idx < 2, "get_global_seq_len is only supported when sequence is sharded"
+        global_seq_len = torch.tensor(input.shape[gather_idx:gather_idx+1], device=input.device) 
+        dist.all_reduce(global_seq_len, op=dist.ReduceOp.SUM, group=sp_group)
+        return global_seq_len.item()
+
+def init_seq_shard_size_list(input, gather_idx, sp_group):
+    seq_world_size = dist.get_world_size(sp_group)
+    global_seq_len = get_global_seq_len(input, gather_idx, sp_group)
+    remainder_seq_len = (global_seq_len % seq_world_size)
+    sub_sequence_len = (global_seq_len // seq_world_size)
+    if remainder_seq_len == 0:
+        set_seq_shard_size_list("even")
+    else:
+        seq_shard_list = [sub_sequence_len+1] * remainder_seq_len + [sub_sequence_len] * (seq_world_size-remainder_seq_len)
+        set_seq_shard_size_list(seq_shard_list)
+
+def pad_sequence_if_uneven(input, scatter_idx, gather_idx, batch_dim_idx, sp_group):
+    if get_seq_shard_size_list() == "even":
+        return input
+    
+    ## sequence is uneven
+    global_seq_len = get_global_seq_len(input, gather_idx, sp_group)
+    seq_shard_list = get_seq_shard_size_list()
+    seq_parallel_size = dist.get_world_size(sp_group)
+    rank = dist.get_rank()
+    dtype = input.dtype
+    
+    seq_dim = 0 if batch_dim_idx == 1 else 1 ## add 1 since dim 0 is seq_world_size
+    padded_local_seq_len = global_seq_len // seq_parallel_size + 1
+    local_seq_len = input.shape[seq_dim]
+    remainder = global_seq_len % seq_parallel_size
+    needs_padding = padded_local_seq_len - local_seq_len != 0
+
+    is_pre_attention = gather_idx < 2
+    if is_pre_attention and needs_padding:
+        padding_shape = list(input.shape)
+        padding_shape[seq_dim] = 1
+        padding_token = torch.empty(padding_shape, device=rank, dtype=dtype)
+        input = torch.cat([padding_token, input], dim=seq_dim)
+    elif not is_pre_attention:
+        padding_shape = list(input.shape)
+        padding_shape[seq_dim] = 1
+        no_padding_split = sum(seq_shard_list[:remainder])
+        seq_splits = [no_padding_split] + seq_shard_list[remainder:]
+        splitted_input_list = torch.split(input, split_size_or_sections=seq_splits, dim=seq_dim)
+        num_smaller_seq_shards = (seq_parallel_size - remainder)
+        padding_list = [torch.empty(padding_shape, device=rank, dtype=dtype) for _ in range(num_smaller_seq_shards)]
+        paired_padding_and_input_list = zip(padding_list, splitted_input_list[1:])
+        striped_padding_and_input_list = list(sum(paired_padding_and_input_list, ())) ## flatten zip
+        padded_input_list = [splitted_input_list[0]] + striped_padding_and_input_list
+
+        input = torch.cat(padded_input_list, dim=seq_dim)
+    return input
+
+def unpad_sequence_if_uneven(input, scatter_idx, gather_idx, batch_dim_idx, sp_group):
+    if get_seq_shard_size_list() == "even":
+        return input
+    
+    global_seq_len = get_global_seq_len(input, gather_idx, sp_group)
+    seq_parallel_size = dist.get_world_size(sp_group)
+    rank = dist.get_rank()
+    
+    seq_dim = 0 if batch_dim_idx == 1 else 1
+    padded_local_seq_len = global_seq_len // seq_parallel_size + 1
+    seq_remainder = global_seq_len % seq_parallel_size
+
+    ## extract padding tokens after sequence splits with remainder tokens
+    is_pre_attention = gather_idx < 2
+    if is_pre_attention:
+        splits = [padded_local_seq_len*seq_remainder] + [padded_local_seq_len] * (seq_parallel_size-seq_remainder)
+        splitted_input = torch.split(input, split_size_or_sections=splits, dim=seq_dim)
+        ## Anyway to not hard code like below? 
+        if seq_dim == 0:
+            extracted_input_list = [splitted_input[0]] + [x[1:] for x in splitted_input[1:]]
+        else:
+            extracted_input_list = [splitted_input[0]] + [x[:, 1:] for x in splitted_input[1:]]
+        input_t = torch.cat(extracted_input_list, dim=seq_dim)
+    elif rank >= seq_remainder:
+        if seq_dim == 0:
+            input_t = input[1:]
+        else:
+            input_t = input[:, 1:]
+    else:
+        input_t = input
+    
+    return input_t
 
 def single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, async_op=False, handle=None, type=None):
     seq_world_size = dist.get_world_size(group)
     # we only need num_heads once
     num_heads = input.shape[2]
+
+    if get_seq_shard_size_list() is None:
+        init_seq_shard_size_list(input, gather_idx, group) ## store local seq shard sizes
+    input = pad_sequence_if_uneven(input, scatter_idx, gather_idx, batch_dim_idx, group)
 
     if get_num_kv_heads() is not None or (num_heads % seq_world_size != 0 and not scatter_idx < 2):
         # Assuming here that the number of heads for q is consistent with kv
@@ -210,6 +308,7 @@ def single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, asyn
             return output
 
     res = post_all2all_fun(output)
+    res = unpad_sequence_if_uneven(res, scatter_idx, gather_idx, batch_dim_idx, group)
     return res
 
 
@@ -359,7 +458,10 @@ class DistributedAttention(torch.nn.Module):
             grad_fn_k.register_prehook(bwd_hook(layer_type='k'))
 
         #out shape : e.g., [s:h/p:]
-
+        # print(f"query_layer.shape: {query_layer.shape}")
+        # print(f"key_layer.shape: {key_layer.shape}")
+        # print(f"value_layer.shape: {value_layer.shape}")
+        # raise KeyboardInterrupt()
         context_layer = self.local_attn(query_layer, key_layer, value_layer, *args, **kwargs)
 
         output = _SeqAllToAll.apply(self.spg, context_layer, self.gather_idx, self.scatter_idx, batch_dim_idx,
