@@ -75,6 +75,9 @@ class CommsLogger:
         self.prof_all = COMMS_LOGGER_PROF_ALL_DEFAULT
         self.enabled = COMMS_LOGGER_ENABLED_DEFAULT
 
+        self.skip_first = True
+        self.iter = 0
+
     def configure(self, comms_config):
         self.enabled = comms_config.comms_logger_enabled
         if self.enabled:
@@ -102,6 +105,11 @@ class CommsLogger:
 
     # Add log entry
     def append(self, raw_name, record_name, latency, msg_size):
+        # Skip if this is the first iteration and skip_first is enabled
+        # print(f"self.is_first_iter: {self.is_first_iter}", flush=True)
+        if self.skip_first and self.iter == 0:
+            return
+            
         algbw, busbw = calc_bw_log(raw_name, msg_size, latency)
         if record_name in self.comms_dict.keys():
             # If this comm_op has already been logged with this message size, just add to existing record
@@ -122,8 +130,18 @@ class CommsLogger:
             log_str = f"comm op: {record_name} | time (ms): {latency:.2f} | msg size: {convert_size(msg_size)} | algbw (Gbps): {algbw:.2f} | busbw (Gbps): {busbw:.2f}"
             log_dist(log_str, [0])
 
+    def mark_iter(self):
+        self.iter += 1
+
     # Print summary at end of iteration, epoch, or training
-    def log_all(self, print_log=True, show_straggler=False):
+    def log_all(self, print_log=True, show_straggler=False, reset=True):
+        if not print_log:
+            return
+        
+        if self.iter == 0:
+            print("iter is not progressing", flush=True)
+            return
+
         import torch
         from deepspeed.utils.timer import trim_mean
         import deepspeed.comm as dist
@@ -142,9 +160,9 @@ class CommsLogger:
                 total_lat = sum(vals[1])
                 # vals[2] and vals[3] are the lists of algbw and busbw, respectively
                 # Get rid of outliers when we print
-                avg_lat = trim_mean(vals[1], 0.1)
-                avg_algbw = trim_mean(vals[2], 0.1)
-                avg_busbw = trim_mean(vals[3], 0.1)
+                avg_lat = trim_mean(vals[1])
+                avg_algbw = trim_mean(vals[2])
+                avg_busbw = trim_mean(vals[3])
                 if print_log:
                     print(
                         f"{' ': <20}{convert_size(msg_size): <20}{count: <20}{total_lat: <20.2f}{avg_lat: <20.2f}{avg_algbw: <20.2f}{avg_busbw: <20.2f}"
@@ -170,9 +188,12 @@ class CommsLogger:
                     dist.all_reduce(min_lats, op=ReduceOp.MIN)
                     total_lat = min_lats.sum().item()
                     total_straggler = (lats - min_lats).sum().item()
-                    avg_lat = trim_mean(min_lats.tolist(), 0.1)
-                    avg_straggler = trim_mean((lats - min_lats).tolist(), 0.1)
+                    avg_lat = trim_mean(min_lats.tolist())
+                    avg_straggler = trim_mean((lats - min_lats).tolist())
                     if print_log:
                         print(
                             f"{' ': <20}{convert_size(msg_size): <20}{count: <20}{total_lat: <20.2f}{total_straggler: <20.2f}{avg_lat: <20.2f}{avg_straggler: <20.2f}"
                         )
+        
+        if reset == True:
+            self.comms_dict = {}

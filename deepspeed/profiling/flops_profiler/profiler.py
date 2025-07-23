@@ -25,6 +25,7 @@ module_mac_count = []
 old_functions = {}
 
 DEFAULT_PRECISION = 2
+DETAIL_VERBOSE = True
 
 
 class FlopsProfiler(object):
@@ -399,15 +400,20 @@ class FlopsProfiler(object):
             macs = get_module_macs(module)
             duration = get_module_duration(module)
             items = [
-                "{} = {:g}% Params".format(
-                    params_to_string(params),
-                    round(100 * params / total_params, DEFAULT_PRECISION) if total_params else 0),
-                "{} = {:g}% MACs".format(macs_to_string(macs),
-                                         round(100 * macs / total_macs, DEFAULT_PRECISION) if total_macs else 0),
-                "{} = {:g}% latency".format(
-                    duration_to_string(duration),
-                    round(100 * duration / total_duration, DEFAULT_PRECISION) if total_duration else 0),
-                flops_to_string(round(flops / duration, DEFAULT_PRECISION) if duration else 0),
+                params_to_string(params),
+                # "{} = {:g}% Params".format(
+                #     params_to_string(params),
+                #     round(100 * params / total_params, DEFAULT_PRECISION) if total_params else 0),
+                # "{} = {:g}% MACs".format(macs_to_string(macs),
+                #                         round(100 * macs / total_macs, DEFAULT_PRECISION) if total_macs else 0),
+                # "{}".format(
+                #     duration_to_string(duration),
+                #     # round(100 * duration / total_duration, DEFAULT_PRECISION) if total_duration else 0),
+                duration_to_string(duration),
+                "total {}, {}".format(
+                    flops_to_string(round(flops, DEFAULT_PRECISION) if duration else 0),
+                    flops_to_string(round(flops / duration, DEFAULT_PRECISION) if duration else 0),
+                )
             ]
             original_extra_repr = module.original_extra_repr()
             if original_extra_repr:
@@ -877,6 +883,8 @@ def wrapFunc(func, funcFlopCompute):
         return oldFunc(*args, **kwds)
 
     newFunc.__str__ = func.__str__
+
+    ## TODO: add torch and comms?
 
     return newFunc
 

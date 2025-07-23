@@ -425,13 +425,13 @@ def monitored_barrier(group=None,
     return cdb.monitored_barrier(group=group, timeout=timeout, wait_all_ranks=wait_all_ranks)
 
 
-def log_summary(show_straggler=False):
+def log_summary(show_straggler=False, **kwargs):
     global cdb
     barrier(log_name='log_summary_barrier')
     if cdb.get_rank() == 0:
-        comms_logger.log_all(print_log=True, show_straggler=show_straggler)
+        comms_logger.log_all(print_log=True, show_straggler=show_straggler, **kwargs)
     else:
-        comms_logger.log_all(print_log=False, show_straggler=show_straggler)
+        comms_logger.log_all(print_log=False, show_straggler=show_straggler, **kwargs)
     barrier(log_name='log_summary_barrier')
 
 
