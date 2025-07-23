@@ -3,8 +3,14 @@
 
 # DeepSpeed Team
 
-import torch
 from .abstract_accelerator import DeepSpeedAccelerator
+
+# During setup stage torch may not be installed, pass on no torch will
+# allow op builder related API to be executed.
+try:
+    import torch
+except ImportError as e:
+    pass
 
 try:
     import oneccl_bindings_for_pytorch  # noqa: F401 # type: ignore
@@ -223,10 +229,17 @@ class CPU_Accelerator(DeepSpeedAccelerator):
         return True
 
     def is_fp16_supported(self):
-        return False
+        try:
+            if torch.ops.mkldnn._is_mkldnn_fp16_supported():
+                return True
+        except:
+            return False
 
     def supported_dtypes(self):
-        return [torch.float, torch.bfloat16]
+        supported_dtypes = [torch.float, torch.bfloat16]
+        if self.is_fp16_supported():
+            supported_dtypes.append(torch.float16)
+        return supported_dtypes
 
     # Graph operations
     def create_graph(self):
