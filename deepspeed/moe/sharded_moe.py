@@ -100,7 +100,13 @@ class _AllToAll(torch.autograd.Function):
         ctx.group = group
         input = input.contiguous()
         output = torch.empty_like(input)
+        # import time
+        # torch.xpu.synchronize()
+        # strt = time.time()
         dist.all_to_all_single(output, input, group=group)
+        # torch.xpu.synchronize()
+        # time_taken = time.time() - strt
+        # print(f"time_taken: {time_taken}", flush=True)
         return output
 
     @staticmethod

@@ -293,7 +293,7 @@ class ThroughputTimer:
         return float("-inf")
 
 
-def trim_mean(data, trim_percent):
+def trim_mean(data, trim_percent=0):
     """Compute the trimmed mean of a list of numbers.
 
     Args:
@@ -303,6 +303,8 @@ def trim_mean(data, trim_percent):
     Returns:
         float: Trimmed mean.
     """
+    assert trim_percent == 0, "Eugene asks, why do you want to bias the mean?"
+    
     assert 0.0 <= trim_percent <= 1.0
     n = len(data)
     # Account for edge case of empty list

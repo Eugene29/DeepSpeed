@@ -106,7 +106,6 @@ class CommsLogger:
     # Add log entry
     def append(self, raw_name, record_name, latency, msg_size):
         # Skip if this is the first iteration and skip_first is enabled
-        # print(f"self.is_first_iter: {self.is_first_iter}", flush=True)
         if self.skip_first and self.iter == 0:
             return
             
@@ -150,23 +149,32 @@ class CommsLogger:
             print(
                 f"{'Comm. Op': <20}{'Message Size': <20}{'Count': <20}{'Total Latency(ms)': <20}{'Avg Latency(ms)': <20}{'tput_avg (Gbps)': <20}{'busbw_avg (Gbps)': <20}"
             )
+        comm_total_latency =  0
         for record_name in self.comms_dict.keys():
             if print_log:
                 print(record_name)
+            agg_total_latency = 0
             for msg_size, vals in sorted(self.comms_dict[record_name].items()):
                 # vals[0] is the count for each msg size
                 count = vals[0]
                 # vals[1] is a list of latency records for each msg size
                 total_lat = sum(vals[1])
+                agg_total_latency += total_lat
                 # vals[2] and vals[3] are the lists of algbw and busbw, respectively
                 # Get rid of outliers when we print
                 avg_lat = trim_mean(vals[1])
                 avg_algbw = trim_mean(vals[2])
                 avg_busbw = trim_mean(vals[3])
-                if print_log:
-                    print(
-                        f"{' ': <20}{convert_size(msg_size): <20}{count: <20}{total_lat: <20.2f}{avg_lat: <20.2f}{avg_algbw: <20.2f}{avg_busbw: <20.2f}"
-                    )
+                print(
+                    f"{' ': <20}{convert_size(msg_size): <20}{count: <20}{total_lat: <20.2f}{avg_lat: <20.2f}{avg_algbw: <20.2f}{avg_busbw: <20.2f}"
+                )
+            latency_string = f'total {record_name} latency: {agg_total_latency:.2f}'
+            print(f"{' ': <20}{latency_string:<20}")
+            comm_total_latency += agg_total_latency
+
+        print("_______________________________")
+        print(f"total comm latency: {comm_total_latency}", flush=True)
+        print("-------------------------------")
 
         if show_straggler:
             if print_log:
