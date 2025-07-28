@@ -61,6 +61,8 @@ class SynchronizedWallClockTimer:
             """Start the timer."""
             assert not self.started_, f"{self.name_} timer has already been started"
             if self.use_host_timer:
+                # NOTE: On Nvidia system or PT >= 2.8 below sync shouldn't be needed?
+                get_accelerator().synchronize()
                 self.start_time = time.time()
             else:
                 event_class = get_accelerator().Event
@@ -73,6 +75,8 @@ class SynchronizedWallClockTimer:
             assert self.started_, "timer is not started"
             event_class = get_accelerator().Event
             if self.use_host_timer:
+                # NOTE: On Nvidia system or PT >= 2.8 below sync shouldn't be needed?
+                get_accelerator().synchronize()
                 self.end_time = time.time()
                 self.event_timers.append(self.end_time - self.start_time)
             else:

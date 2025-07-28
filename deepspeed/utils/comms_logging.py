@@ -75,9 +75,6 @@ class CommsLogger:
         self.prof_all = COMMS_LOGGER_PROF_ALL_DEFAULT
         self.enabled = COMMS_LOGGER_ENABLED_DEFAULT
 
-        self.skip_first = True
-        self.iter = 0
-
     def configure(self, comms_config):
         self.enabled = comms_config.comms_logger_enabled
         if self.enabled:
@@ -105,10 +102,6 @@ class CommsLogger:
 
     # Add log entry
     def append(self, raw_name, record_name, latency, msg_size):
-        # Skip if this is the first iteration and skip_first is enabled
-        if self.skip_first and self.iter == 0:
-            return
-            
         algbw, busbw = calc_bw_log(raw_name, msg_size, latency)
         if record_name in self.comms_dict.keys():
             # If this comm_op has already been logged with this message size, just add to existing record
@@ -129,18 +122,11 @@ class CommsLogger:
             log_str = f"comm op: {record_name} | time (ms): {latency:.2f} | msg size: {convert_size(msg_size)} | algbw (Gbps): {algbw:.2f} | busbw (Gbps): {busbw:.2f}"
             log_dist(log_str, [0])
 
-    def mark_iter(self):
-        self.iter += 1
-
     # Print summary at end of iteration, epoch, or training
     def log_all(self, print_log=True, show_straggler=False, reset=True):
         if not print_log:
             return
         
-        if self.iter == 0:
-            print("iter is not progressing", flush=True)
-            return
-
         import torch
         from deepspeed.utils.timer import trim_mean
         import deepspeed.comm as dist
